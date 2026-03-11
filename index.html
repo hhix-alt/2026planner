@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mobile-web-app-capable" content="yes">
 <title>Personal Planner</title>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=DM+Sans:wght@300;400;500&family=DM+Mono:wght@300;400&display=swap" rel="stylesheet">
 <style>
@@ -1917,20 +1920,7 @@ function setupNotesPageCanvas() {
   }, {passive:false});
 }
 
-document.getElementById('notes-prev').addEventListener('click', () => {
-  if (notesPageIndex <= 1) return;
-  saveNotesPage(notesPageIndex);
-  notesPageIndex--;
-  initNotesPage(notesPageIndex);
-  setTimeout(resizeGlobalCanvas, 60);
-});
-document.getElementById('notes-next').addEventListener('click', () => {
-  if (notesPageIndex >= 50) return;
-  saveNotesPage(notesPageIndex);
-  notesPageIndex++;
-  initNotesPage(notesPageIndex);
-  setTimeout(resizeGlobalCanvas, 60);
-});
+// notes nav handled by navBtn above
 
 // ══════════════════════════════════════════
 //  APPLE CALENDAR SYNC
@@ -2165,17 +2155,40 @@ document.getElementById('day-task-input').addEventListener('keydown', (e) => {
 // ══════════════════════════════════════════
 //  NAVIGATION
 // ══════════════════════════════════════════
-document.getElementById('month-prev').addEventListener('click', () => { state.monthOffset--; renderMonth(); });
-document.getElementById('month-next').addEventListener('click', () => { state.monthOffset++; renderMonth(); });
-document.getElementById('month-today').addEventListener('click', () => { state.monthOffset = 0; renderMonth(); });
+// ── PWA-safe nav button helper ──
+function navBtn(id, fn) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener('click', fn);
+  el.addEventListener('touchend', (e) => { e.preventDefault(); fn(); });
+}
 
-document.getElementById('week-prev').addEventListener('click', () => { state.weekOffset--; renderWeek(); });
-document.getElementById('week-next').addEventListener('click', () => { state.weekOffset++; renderWeek(); });
-document.getElementById('week-today').addEventListener('click', () => { state.weekOffset = 0; renderWeek(); });
+navBtn('month-prev',  () => { state.monthOffset--; renderMonth(); });
+navBtn('month-next',  () => { state.monthOffset++; renderMonth(); });
+navBtn('month-today', () => { state.monthOffset = 0; renderMonth(); });
 
-document.getElementById('day-prev').addEventListener('click', () => { state.dayOffset--; renderDay(); });
-document.getElementById('day-next').addEventListener('click', () => { state.dayOffset++; renderDay(); });
-document.getElementById('day-today').addEventListener('click', () => { state.dayOffset = 0; renderDay(); });
+navBtn('week-prev',   () => { state.weekOffset--; renderWeek(); });
+navBtn('week-next',   () => { state.weekOffset++; renderWeek(); });
+navBtn('week-today',  () => { state.weekOffset = 0; renderWeek(); });
+
+navBtn('day-prev',    () => { state.dayOffset--; renderDay(); });
+navBtn('day-next',    () => { state.dayOffset++; renderDay(); });
+navBtn('day-today',   () => { state.dayOffset = 0; renderDay(); });
+
+navBtn('notes-prev',  () => {
+  if (notesPageIndex <= 1) return;
+  saveNotesPage(notesPageIndex);
+  notesPageIndex--;
+  initNotesPage(notesPageIndex);
+  setTimeout(resizeGlobalCanvas, 60);
+});
+navBtn('notes-next',  () => {
+  if (notesPageIndex >= 50) return;
+  saveNotesPage(notesPageIndex);
+  notesPageIndex++;
+  initNotesPage(notesPageIndex);
+  setTimeout(resizeGlobalCanvas, 60);
+});
 
 // ══════════════════════════════════════════
 //  VIEW SWITCHER
@@ -2196,8 +2209,14 @@ function switchView(v) {
   setTimeout(resizeGlobalCanvas, 80);
 }
 
+// iPad PWA fix: in standalone mode (Add to Home Screen), click events on divs
+// are unreliable. Use both 'click' and 'touchend' to cover both Safari and PWA.
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => switchView(tab.dataset.view));
+  tab.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    switchView(tab.dataset.view);
+  });
 });
 
 // ══════════════════════════════════════════
