@@ -69,7 +69,7 @@
     justify-content: center;
   }
   .spine::after {
-    content: 'MY PLANNER 2025';
+    content: 'MY PLANNER 2026  ·  v1.7';
     writing-mode: vertical-rl;
     transform: rotate(180deg);
     font-family: 'DM Mono', monospace;
@@ -825,9 +825,21 @@
   /* ══════════════════════════════════════
      NOTES SECTION SYSTEM
   ══════════════════════════════════════ */
+
+  /* Sub-views sit inside .view which is position:absolute;inset:0 */
+  .notes-subview {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--warm-white);
+    overflow: hidden;
+  }
+
   #notes-toc-body {
     flex: 1;
     overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
     padding: 24px 28px;
     background: var(--warm-white);
   }
@@ -900,14 +912,16 @@
   #ns-page-area {
     flex: 1;
     display: flex;
+    flex-direction: row;
     overflow: hidden;
-    position: relative;
+    min-height: 0;
   }
   #ns-canvas-wrap {
     flex: 1;
     position: relative;
     background: var(--warm-white);
     overflow: hidden;
+    min-width: 0;
   }
   #ns-ruled {
     position: absolute;
@@ -1307,10 +1321,6 @@
               <div class="note-section">
                 <div class="note-section-left">
                   <div class="note-section-label">Notes</div>
-                  <div class="note-subject-line">
-                    <input type="text" class="note-subject-input" placeholder="Subject…" data-note="0" />
-                  </div>
-                  <div class="note-date-line" id="note-date-0"></div>
                 </div>
                 <div class="note-section-right">
                   <div class="notes-canvas-wrap note-canvas-wrap" id="note-wrap-0">
@@ -1323,10 +1333,6 @@
               <div class="note-section">
                 <div class="note-section-left">
                   <div class="note-section-label">Notes</div>
-                  <div class="note-subject-line">
-                    <input type="text" class="note-subject-input" placeholder="Subject…" data-note="1" />
-                  </div>
-                  <div class="note-date-line" id="note-date-1"></div>
                 </div>
                 <div class="note-section-right">
                   <div class="notes-canvas-wrap note-canvas-wrap" id="note-wrap-1">
@@ -1339,10 +1345,6 @@
               <div class="note-section">
                 <div class="note-section-left">
                   <div class="note-section-label">Notes</div>
-                  <div class="note-subject-line">
-                    <input type="text" class="note-subject-input" placeholder="Subject…" data-note="2" />
-                  </div>
-                  <div class="note-date-line" id="note-date-2"></div>
                 </div>
                 <div class="note-section-right">
                   <div class="notes-canvas-wrap note-canvas-wrap" id="note-wrap-2">
@@ -1363,8 +1365,8 @@
     <!-- ══ NOTES VIEW ══ -->
     <div class="view" id="view-notes">
 
-      <!-- SUB-VIEW: Table of Contents -->
-      <div id="notes-toc" style="display:flex;flex-direction:column;height:100%;">
+      <!-- SUB-VIEW A: Table of Contents -->
+      <div id="notes-toc" class="notes-subview">
         <div class="page-header">
           <div>
             <div class="page-title" style="font-family:'Playfair Display',serif;">Notes</div>
@@ -1377,8 +1379,8 @@
         </div>
       </div>
 
-      <!-- SUB-VIEW: Section Pages -->
-      <div id="notes-section-view" style="display:none;flex-direction:column;height:100%;position:relative;">
+      <!-- SUB-VIEW B: Section Pages -->
+      <div id="notes-section-view" class="notes-subview" style="display:none;">
         <div class="page-header">
           <div>
             <div class="page-title" id="ns-title">Section 1</div>
@@ -1390,21 +1392,14 @@
             <div class="nav-btn" id="ns-next">&#8594;</div>
           </div>
         </div>
-        <!-- Page area with right-side page tabs -->
         <div id="ns-page-area">
-          <!-- Page tabs on the right -->
-          <div id="ns-page-tabs"></div>
-          <!-- Canvas area -->
           <div id="ns-canvas-wrap">
-            <!-- Section label top-right -->
             <div id="ns-section-label"></div>
-            <!-- Page number bottom-right -->
             <div id="ns-page-num"></div>
-            <!-- Ruled lines -->
             <div id="ns-ruled"></div>
-            <!-- Drawing canvas -->
             <canvas id="ns-canvas"></canvas>
           </div>
+          <div id="ns-page-tabs"></div>
         </div>
       </div>
 
@@ -1926,7 +1921,7 @@ function initDayNoteCanvases(dk) {
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     noteCanvases[i] = canvas;
     noteCtxs[i]     = ctx;
-    // Restore saved
+    // Restore saved drawing
     const saved = (state.noteCanvases || {})[`${dk}-${i}`];
     if (saved) {
       const img = new Image();
@@ -1934,21 +1929,6 @@ function initDayNoteCanvases(dk) {
       img.src = saved;
     } else {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-    }
-    // Subject inputs
-    const subj = document.querySelector(`.note-subject-input[data-note="${i}"]`);
-    if (subj) {
-      subj.value = ((state.noteSubjects || {})[`${dk}-${i}`]) || '';
-      subj.oninput = () => {
-        if (!state.noteSubjects) state.noteSubjects = {};
-        state.noteSubjects[`${dk}-${i}`] = subj.value;
-      };
-    }
-    // Date label
-    const dateEl = document.getElementById(`note-date-${i}`);
-    if (dateEl) {
-      const d = parseKey(dk);
-      dateEl.textContent = `${MONTHS[d.getMonth()].slice(0,3)} ${d.getDate()}`;
     }
   }
 }
@@ -2033,8 +2013,10 @@ let nsCanvas = null, nsCtx = null, nsDrawing = false;
 
 // ── Build Table of Contents ──
 function renderNotesTOC() {
-  document.getElementById('notes-toc').style.display      = 'flex';
-  document.getElementById('notes-section-view').style.display = 'none';
+  const toc = document.getElementById('notes-toc');
+  const sec = document.getElementById('notes-section-view');
+  toc.style.display = 'flex';
+  sec.style.display = 'none';
 
   const container = document.getElementById('toc-sections');
   container.innerHTML = '';
@@ -2091,8 +2073,8 @@ function openNotesSection(s, p) {
   nsCurrentSection = s;
   nsCurrentPage    = p || 1;
 
-  document.getElementById('notes-toc').style.display           = 'none';
-  document.getElementById('notes-section-view').style.display  = 'flex';
+  document.getElementById('notes-toc').style.display          = 'none';
+  document.getElementById('notes-section-view').style.display = 'flex';
 
   buildPageTabs(s);
   loadNsPage(s, nsCurrentPage);
@@ -2650,10 +2632,11 @@ window.addEventListener('resize', () => {
 });
 
 // ══════════════════════════════════════════
-//  GLOBAL DRAW OVERLAY ENGINE
-//  - Retina/HiDPI sharp rendering (device pixel ratio aware)
-//  - Drawings stay visible in both Draw and Done modes
-//  - Navigation tabs work correctly (no duplicate switchView)
+//  FOUNTAIN PEN DRAWING ENGINE  v1.8
+//  Phase 1: Pressure + Bezier smoothing
+//  Phase 2: Apple Pencil / palm rejection
+//  Phase 3: Organic width transitions
+//  Phase 4: Undo/Redo stacks, smart eraser
 // ══════════════════════════════════════════
 const overlay     = document.getElementById('global-draw-overlay');
 const globalCanvas= document.getElementById('global-draw-canvas');
@@ -2662,149 +2645,274 @@ const fab         = document.getElementById('pencil-fab');
 const fabLabel    = document.getElementById('fab-label');
 const drawToolbar = document.getElementById('draw-toolbar');
 
+// ── Tool state ──
 let gDrawMode = false;
-let gTool     = 'pen';
+let gTool     = 'pen';      // 'pen' | 'marker' | 'eraser'
 let gColor    = '#1A1410';
-let gSize     = 2;
-let gDrawing  = false;
+let gBaseSize = 2;          // base stroke width (user-controlled)
 
+// ── Fountain pen stroke state ──
+let gDrawing        = false;
+let gPrevX          = 0, gPrevY = 0;       // previous point
+let gMidX           = 0, gMidY = 0;        // bezier midpoint
+let gSmoothedWidth  = 1;                   // pressure-smoothed width
+let gLastPressure   = 0.5;                 // previous pressure sample
+
+// ── Per-view canvas store ──
 state.overlayCanvases = {};
 state.overlayUndo     = {};
+state.overlayRedo     = {};
 
-// ── Key for current view ──
+// ────────────────────────────────────────
+//  RETINA + CANVAS SIZING
+// ────────────────────────────────────────
 function overlayKey() {
   if (state.currentView === 'month') {
     const d = currentMonthDate();
     return `month-${d.getFullYear()}-${d.getMonth()}`;
   }
-  if (state.currentView === 'week') {
-    return `week-${getWeekKey(currentWeekMonday())}`;
-  }
-  if (state.currentView === 'notes') {
-    return `notes-${notesPageIndex}`;
-  }
+  if (state.currentView === 'week')  return `week-${getWeekKey(currentWeekMonday())}`;
+  if (state.currentView === 'notes') return `notes-overlay`;
   return `day-${dateKey(currentDay())}`;
 }
 
-// ── Retina-aware canvas sizing ──
-// Sets canvas pixel buffer to physical pixels, CSS size to logical pixels.
-// This is the fix for blotchy/blurry drawing on iPad retina screens.
-function setCanvasRetina(canvas, logicalW, logicalH) {
+function setCanvasRetina(canvas, logW, logH) {
   const dpr = window.devicePixelRatio || 1;
-  canvas.width  = Math.floor(logicalW  * dpr);
-  canvas.height = Math.floor(logicalH * dpr);
-  canvas.style.width  = logicalW  + 'px';
-  canvas.style.height = logicalH + 'px';
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-  return dpr;
+  canvas.width  = Math.floor(logW * dpr);
+  canvas.height = Math.floor(logH * dpr);
+  canvas.style.width  = logW + 'px';
+  canvas.style.height = logH + 'px';
+  canvas.getContext('2d').scale(dpr, dpr);
 }
 
-// ── Save before resize ──
+function logicalSize(canvas) {
+  // Returns the CSS (logical) dimensions
+  return {
+    w: parseFloat(canvas.style.width)  || canvas.width,
+    h: parseFloat(canvas.style.height) || canvas.height
+  };
+}
+
+function clearCtx(ctx, canvas) {
+  ctx.save();
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.restore();
+}
+
+function restoreImageToCtx(ctx, canvas, dataURL) {
+  if (!dataURL) return;
+  const img = new Image();
+  img.onload = () => {
+    ctx.save();
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    ctx.restore();
+  };
+  img.src = dataURL;
+}
+
 function saveGlobalCanvas() {
-  const key = overlayKey();
-  // Save at logical size so restore works regardless of DPR
-  state.overlayCanvases[key] = globalCanvas.toDataURL();
+  state.overlayCanvases[overlayKey()] = globalCanvas.toDataURL();
 }
 
-// ── Restore drawing onto canvas ──
 function restoreGlobalCanvas() {
-  const key = overlayKey();
-  const dpr = window.devicePixelRatio || 1;
-  gCtx.clearRect(0, 0, globalCanvas.width / dpr, globalCanvas.height / dpr);
-  if (state.overlayCanvases[key]) {
-    const img = new Image();
-    img.onload = () => {
-      gCtx.save();
-      gCtx.setTransform(1,0,0,1,0,0); // bypass DPR scale for image restore
-      gCtx.drawImage(img, 0, 0, globalCanvas.width, globalCanvas.height);
-      gCtx.restore();
-    };
-    img.src = state.overlayCanvases[key];
-  }
+  clearCtx(gCtx, globalCanvas);
+  restoreImageToCtx(gCtx, globalCanvas, state.overlayCanvases[overlayKey()]);
 }
 
-// ── Resize + restore ──
 function resizeGlobalCanvas() {
   const main = document.querySelector('.main');
   if (!main) return;
-  const r = main.getBoundingClientRect();
-  // Save before wiping
+  const r   = main.getBoundingClientRect();
   const key = overlayKey();
-  if (globalCanvas.width > 0 && globalCanvas.height > 0) {
-    state.overlayCanvases[key] = globalCanvas.toDataURL();
-  }
-  // Size the canvas to the .main logical dimensions
+  if (globalCanvas.width > 0) state.overlayCanvases[key] = globalCanvas.toDataURL();
   setCanvasRetina(globalCanvas, r.width, r.height);
   restoreGlobalCanvas();
 }
 
-// ── Undo ──
+// ────────────────────────────────────────
+//  UNDO / REDO  (per view, 30 steps)
+// ────────────────────────────────────────
 function pushUndo() {
   const key = overlayKey();
   if (!state.overlayUndo[key]) state.overlayUndo[key] = [];
+  if (!state.overlayRedo[key]) state.overlayRedo[key] = [];
   state.overlayUndo[key].push(globalCanvas.toDataURL());
-  if (state.overlayUndo[key].length > 20) state.overlayUndo[key].shift();
+  if (state.overlayUndo[key].length > 30) state.overlayUndo[key].shift();
+  state.overlayRedo[key] = []; // clear redo on new stroke
 }
 
 function doUndo() {
-  const key = overlayKey();
-  const stack = state.overlayUndo[key];
-  if (!stack || stack.length === 0) { showToast('Nothing to undo'); return; }
-  const prev = stack.pop();
-  const dpr  = window.devicePixelRatio || 1;
-  gCtx.save();
-  gCtx.setTransform(1,0,0,1,0,0);
-  gCtx.clearRect(0, 0, globalCanvas.width, globalCanvas.height);
-  gCtx.restore();
-  const img = new Image();
-  img.onload = () => {
-    gCtx.save();
-    gCtx.setTransform(1,0,0,1,0,0);
-    gCtx.drawImage(img, 0, 0, globalCanvas.width, globalCanvas.height);
-    gCtx.restore();
-    saveGlobalCanvas();
-  };
-  img.src = prev;
+  const key   = overlayKey();
+  const uStack = state.overlayUndo[key];
+  const rStack = state.overlayRedo[key] || (state.overlayRedo[key] = []);
+  if (!uStack || uStack.length === 0) { showToast('Nothing to undo'); return; }
+  rStack.push(globalCanvas.toDataURL());
+  const prev = uStack.pop();
+  clearCtx(gCtx, globalCanvas);
+  restoreImageToCtx(gCtx, globalCanvas, prev);
+  setTimeout(saveGlobalCanvas, 50);
 }
 
-// ── Get pointer position in LOGICAL pixels (accounts for DPR via CSS size) ──
-function getGPos(e) {
-  const rect = globalCanvas.getBoundingClientRect(); // logical CSS size
-  const src  = e.touches ? e.touches[0] : e;
-  return {
-    x: src.clientX - rect.left,
-    y: src.clientY - rect.top
-  };
+function doRedo() {
+  const key   = overlayKey();
+  const uStack = state.overlayUndo[key] || (state.overlayUndo[key] = []);
+  const rStack = state.overlayRedo[key];
+  if (!rStack || rStack.length === 0) { showToast('Nothing to redo'); return; }
+  uStack.push(globalCanvas.toDataURL());
+  const next = rStack.pop();
+  clearCtx(gCtx, globalCanvas);
+  restoreImageToCtx(gCtx, globalCanvas, next);
+  setTimeout(saveGlobalCanvas, 50);
 }
 
-// ── Apply stroke style (line width in logical pixels — DPR scaling handles the rest) ──
-function applyGStyle() {
-  gCtx.lineCap  = 'round';
-  gCtx.lineJoin = 'round';
-  gCtx.globalCompositeOperation = 'source-over';
+// ────────────────────────────────────────
+//  FOUNTAIN PEN CORE ENGINE
+//  Bezier smoothing + pressure width
+// ────────────────────────────────────────
+
+// Smoothed pressure: weighted average so width changes feel organic, not twitchy
+function smoothPressure(rawPressure) {
+  // Fallback: if no real pressure data (mouse / pointerType=mouse), use 0.5
+  const p = (rawPressure > 0 && rawPressure <= 1) ? rawPressure : 0.5;
+  // Weighted average: 70% previous + 30% new → smooth organic transition
+  gLastPressure = gLastPressure * 0.7 + p * 0.3;
+  return gLastPressure;
+}
+
+function pressureWidth(pressure) {
+  // Fountain pen: thin at low pressure, thickens with push
+  // gBaseSize acts as the "medium" width; min is 0.4×, max is 2.5×
+  const minW = Math.max(0.4, gBaseSize * 0.4);
+  const maxW = gBaseSize * 2.5;
+  return minW + (maxW - minW) * pressure;
+}
+
+// Begin a new stroke
+function fpBegin(x, y, pressure) {
+  gPrevX = x; gPrevY = y;
+  gMidX  = x; gMidY  = y;
+  gLastPressure  = smoothPressure(pressure);
+  gSmoothedWidth = pressureWidth(gLastPressure);
+  gCtx.beginPath();
+  gCtx.moveTo(x, y);
+}
+
+// Draw a segment using quadratic bezier for smoothness
+function fpDraw(x, y, pressure) {
+  const w = pressureWidth(smoothPressure(pressure));
+
+  // Midpoint between previous and current → bezier control point
+  const newMidX = (gPrevX + x) / 2;
+  const newMidY = (gPrevY + y) / 2;
+
+  gCtx.beginPath();
+  gCtx.moveTo(gMidX, gMidY);
+  gCtx.quadraticCurveTo(gPrevX, gPrevY, newMidX, newMidY);
+
+  gCtx.lineCap    = 'round';
+  gCtx.lineJoin   = 'round';
+  gCtx.lineWidth  = w;
+
   if (gTool === 'eraser') {
     gCtx.globalCompositeOperation = 'destination-out';
-    gCtx.lineWidth   = gSize * 5;
     gCtx.strokeStyle = 'rgba(0,0,0,1)';
+    gCtx.lineWidth   = w * 5; // eraser wider
   } else if (gTool === 'marker') {
-    gCtx.lineWidth = gSize * 4;
-    const r = parseInt(gColor.slice(1,3),16);
-    const g2= parseInt(gColor.slice(3,5),16);
-    const b = parseInt(gColor.slice(5,7),16);
-    gCtx.strokeStyle = `rgba(${r},${g2},${b},0.3)`;
+    gCtx.globalCompositeOperation = 'source-over';
+    const r  = parseInt(gColor.slice(1,3),16);
+    const g2 = parseInt(gColor.slice(3,5),16);
+    const b  = parseInt(gColor.slice(5,7),16);
+    gCtx.strokeStyle = `rgba(${r},${g2},${b},0.25)`;
+    gCtx.lineWidth   = w * 3;
   } else {
-    // pen — crisp, pressure-independent
-    gCtx.lineWidth   = Math.max(1, gSize);
+    gCtx.globalCompositeOperation = 'source-over';
     gCtx.strokeStyle = gColor;
   }
+
+  gCtx.stroke();
+
+  // Advance state
+  gMidX  = newMidX; gMidY  = newMidY;
+  gPrevX = x;       gPrevY = y;
 }
 
-// ── Toggle draw mode ──
+function fpEnd() {
+  gCtx.globalCompositeOperation = 'source-over';
+}
+
+// ────────────────────────────────────────
+//  POINTER EVENT HANDLERS
+//  Palm rejection: only 'pen' and 'mouse'
+//  Touch fingers are ignored entirely
+// ────────────────────────────────────────
+function getCanvasXY(e) {
+  // offsetX/Y work correctly for pointer events (already in canvas space)
+  return { x: e.offsetX, y: e.offsetY, pressure: e.pressure || 0.5 };
+}
+
+globalCanvas.addEventListener('pointerdown', e => {
+  if (!gDrawMode) return;
+  // PALM REJECTION: drop all 'touch' pointer type — only pen and mouse draw
+  if (e.pointerType === 'touch') return;
+  e.preventDefault();
+  pushUndo();
+  gDrawing = true;
+  const { x, y, pressure } = getCanvasXY(e);
+  fpBegin(x, y, pressure);
+}, { passive: false });
+
+globalCanvas.addEventListener('pointermove', e => {
+  if (!gDrawMode || !gDrawing) return;
+  if (e.pointerType === 'touch') return;
+  e.preventDefault();
+  // getCoalescedEvents gives every sample between frames — critical for fast writing
+  const pts = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+  pts.forEach(ev => {
+    fpDraw(ev.offsetX, ev.offsetY, ev.pressure || 0.5);
+  });
+}, { passive: false });
+
+globalCanvas.addEventListener('pointerup', e => {
+  if (!gDrawing) return;
+  if (e.pointerType === 'touch') return;
+  e.preventDefault();
+  gDrawing = false;
+  fpEnd();
+  saveGlobalCanvas();
+}, { passive: false });
+
+globalCanvas.addEventListener('pointercancel', () => {
+  if (gDrawing) { gDrawing = false; fpEnd(); saveGlobalCanvas(); }
+});
+
+// Mouse fallback for non-Pencil use (desktop testing etc.)
+globalCanvas.addEventListener('mousedown', e => {
+  if (!gDrawMode || e.button !== 0) return;
+  pushUndo();
+  gDrawing = true;
+  fpBegin(e.offsetX, e.offsetY, 0.5);
+});
+globalCanvas.addEventListener('mousemove', e => {
+  if (!gDrawMode || !gDrawing) return;
+  fpDraw(e.offsetX, e.offsetY, 0.5);
+});
+globalCanvas.addEventListener('mouseup', () => {
+  if (!gDrawing) return;
+  gDrawing = false; fpEnd(); saveGlobalCanvas();
+});
+globalCanvas.addEventListener('mouseleave', () => {
+  if (gDrawing) { gDrawing = false; fpEnd(); saveGlobalCanvas(); }
+});
+
+// ────────────────────────────────────────
+//  DRAW MODE TOGGLE
+// ────────────────────────────────────────
 let _fabLastToggle = 0;
 function toggleDrawMode() {
   const now = Date.now();
-  if (now - _fabLastToggle < 400) return; // debounce — prevent touchend+click double-fire
+  if (now - _fabLastToggle < 400) return;
   _fabLastToggle = now;
   gDrawMode = !gDrawMode;
   fab.classList.toggle('draw-active', gDrawMode);
@@ -2813,7 +2921,7 @@ function toggleDrawMode() {
   overlay.style.pointerEvents = gDrawMode ? 'all' : 'none';
   if (gDrawMode) {
     resizeGlobalCanvas();
-    showToast('Drawing ON — tap Done when finished');
+    showToast('Drawing ON — Pencil to write, Done when finished');
   } else {
     showToast('Drawing saved');
   }
@@ -2821,7 +2929,9 @@ function toggleDrawMode() {
 fab.addEventListener('click',    toggleDrawMode);
 fab.addEventListener('touchend', e => { e.preventDefault(); toggleDrawMode(); });
 
-// ── Toolbar controls ──
+// ────────────────────────────────────────
+//  TOOLBAR
+// ────────────────────────────────────────
 document.getElementById('dt-pen').addEventListener('click',    () => setGTool('pen'));
 document.getElementById('dt-marker').addEventListener('click', () => setGTool('marker'));
 document.getElementById('dt-eraser').addEventListener('click', () => setGTool('eraser'));
@@ -2843,96 +2953,34 @@ document.querySelectorAll('.dt-swatch').forEach(sw => {
 });
 
 document.getElementById('dt-size').addEventListener('input', e => {
-  gSize = parseInt(e.target.value);
+  gBaseSize = parseInt(e.target.value);
 });
 
 document.getElementById('dt-clear').addEventListener('click', () => {
   pushUndo();
-  const dpr = window.devicePixelRatio || 1;
-  gCtx.save(); gCtx.setTransform(1,0,0,1,0,0);
-  gCtx.clearRect(0, 0, globalCanvas.width, globalCanvas.height);
-  gCtx.restore();
+  clearCtx(gCtx, globalCanvas);
   saveGlobalCanvas();
-  showToast('Drawing cleared');
+  showToast('Page cleared');
 });
 
 document.getElementById('dt-undo').addEventListener('click', doUndo);
 
-// ── Drawing events — mouse ──
-globalCanvas.addEventListener('mousedown', e => {
-  if (!gDrawMode) return;
-  pushUndo();
-  gDrawing = true;
-  const {x,y} = getGPos(e);
-  applyGStyle();
-  gCtx.beginPath();
-  gCtx.moveTo(x, y);
-});
+// Add Redo button dynamically next to Undo
+(function addRedoBtn() {
+  const undoBtn = document.getElementById('dt-undo');
+  if (!undoBtn) return;
+  const redo = document.createElement('button');
+  redo.className = 'dt-btn';
+  redo.id = 'dt-redo';
+  redo.textContent = '↪';
+  redo.title = 'Redo';
+  redo.addEventListener('click', doRedo);
+  undoBtn.after(redo);
+})();
 
-globalCanvas.addEventListener('mousemove', e => {
-  if (!gDrawing) return;
-  const {x,y} = getGPos(e);
-  applyGStyle();
-  gCtx.lineTo(x, y);
-  gCtx.stroke();
-  gCtx.beginPath();
-  gCtx.moveTo(x, y);
-});
-
-globalCanvas.addEventListener('mouseup', () => {
-  if (!gDrawing) return;
-  gDrawing = false;
-  gCtx.globalCompositeOperation = 'source-over';
-  saveGlobalCanvas();
-});
-
-globalCanvas.addEventListener('mouseleave', () => {
-  if (gDrawing) { gDrawing = false; saveGlobalCanvas(); }
-});
-
-// ── Drawing events — touch / Apple Pencil ──
-// Apple Pencil fires touch events. Using pointermove gives smoother lines
-// because the browser can coalesce fewer events. We use touch as fallback.
-globalCanvas.addEventListener('pointerdown', e => {
-  if (!gDrawMode) return;
-  if (e.pointerType === 'touch' && !e.isPrimary) return; // ignore multi-touch
-  pushUndo();
-  gDrawing = true;
-  applyGStyle();
-  gCtx.beginPath();
-  gCtx.moveTo(e.offsetX, e.offsetY);
-  e.preventDefault();
-}, {passive: false});
-
-globalCanvas.addEventListener('pointermove', e => {
-  if (!gDrawMode || !gDrawing) return;
-  if (e.pointerType === 'touch' && !e.isPrimary) return;
-  // Use getCoalescedEvents for silky smooth Apple Pencil lines
-  const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
-  applyGStyle();
-  events.forEach(ev => {
-    gCtx.lineTo(ev.offsetX, ev.offsetY);
-    gCtx.stroke();
-    gCtx.beginPath();
-    gCtx.moveTo(ev.offsetX, ev.offsetY);
-  });
-  e.preventDefault();
-}, {passive: false});
-
-globalCanvas.addEventListener('pointerup', e => {
-  if (!gDrawing) return;
-  gDrawing = false;
-  gCtx.globalCompositeOperation = 'source-over';
-  saveGlobalCanvas();
-  e.preventDefault();
-}, {passive: false});
-
-globalCanvas.addEventListener('pointercancel', () => {
-  if (gDrawing) { gDrawing = false; saveGlobalCanvas(); }
-});
-
-// ── Re-render overlay when navigating (save + restore per view/page) ──
-// Hooked into navigation buttons so each month/week/day has its own ink layer
+// ────────────────────────────────────────
+//  NAVIGATION — restore overlay per view
+// ────────────────────────────────────────
 ['month-prev','month-next','month-today',
  'week-prev','week-next','week-today',
  'day-prev','day-next','day-today'].forEach(id => {
@@ -2940,8 +2988,8 @@ globalCanvas.addEventListener('pointercancel', () => {
   if (el) el.addEventListener('click', () => setTimeout(resizeGlobalCanvas, 80));
 });
 
-// Initial overlay setup — always visible, pointer-events off until Draw tapped
-overlay.style.display      = 'block';
+// Initial state — overlay always visible, pointer-events off until Draw tapped
+overlay.style.display       = 'block';
 overlay.style.pointerEvents = 'none';
 resizeGlobalCanvas();
 </script>
