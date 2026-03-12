@@ -34,6 +34,16 @@
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
+  /* Prevent Safari from intercepting ANY touch/gesture on the page */
+  html, body {
+    touch-action: none;
+    overscroll-behavior: none;
+    -webkit-overflow-scrolling: auto;
+    overflow: hidden;
+    position: fixed;
+    width: 100%; height: 100%;
+  }
+
   body {
     font-family: 'DM Sans', sans-serif;
     background: #D4C9BA;
@@ -69,7 +79,7 @@
     justify-content: center;
   }
   .spine::after {
-    content: 'MY PLANNER 2026  ·  v1.10';
+    content: 'MY PLANNER 2026  ·  v1.11';
     writing-mode: vertical-rl;
     transform: rotate(180deg);
     font-family: 'DM Mono', monospace;
@@ -1068,12 +1078,11 @@
   /* ── Global Draw Overlay ── */
   #global-draw-overlay {
     position: absolute;
-    top: 0; bottom: 0; right: 0;
-    left: calc(var(--tab-w) + 20px);
+    /* Cover the entire app — tabs/spine handled by pointer-events on those elements */
+    inset: 0;
     z-index: 50;
     display: block;
     pointer-events: none;
-    /* PALM REJECTION at CSS level — tells iOS to ignore all finger/hand contact */
     touch-action: none;
     cursor: crosshair;
   }
@@ -1083,7 +1092,6 @@
     width: 100%;
     height: 100%;
     touch-action: none;
-    /* Do NOT override pointer-events here — parent controls it */
   }
 
   /* ── Floating Pencil Button ── */
@@ -2634,7 +2642,7 @@ window.addEventListener('resize', () => {
 // ══════════════════════════════════════════
 const overlay     = document.getElementById('global-draw-overlay');
 const globalCanvas = document.getElementById('global-draw-canvas');
-const gCtx        = globalCanvas.getContext('2d', { desynchronized: true, willReadFrequently: false });
+const gCtx = globalCanvas.getContext('2d', { desynchronized: true });
 const fab         = document.getElementById('pencil-fab');
 const fabLabel    = document.getElementById('fab-label');
 const drawToolbar = document.getElementById('draw-toolbar');
@@ -2674,14 +2682,26 @@ function overlayKey() {
 // ─────────────────────────────────────────
 function applyRetinaScale() {
   gDPR = window.devicePixelRatio || 1;
-  const main = document.querySelector('.main');
-  if (!main) return;
-  const r = main.getBoundingClientRect();
+  const app = document.getElementById('app');
+  if (!app) return;
+  const r = app.getBoundingClientRect();
   globalCanvas.width        = Math.round(r.width  * gDPR);
   globalCanvas.height       = Math.round(r.height * gDPR);
   globalCanvas.style.width  = r.width  + 'px';
   globalCanvas.style.height = r.height + 'px';
   gCtx.setTransform(gDPR, 0, 0, gDPR, 0, 0);
+}
+
+// Use clientX/Y relative to canvas rect — offsetX/Y is unreliable when
+// canvas is inside a transformed or offset container
+function getEventPos(e) {
+  const rect = globalCanvas.getBoundingClientRect();
+  return {
+    x: e.clientX - rect.left,
+    y: e.clientY - rect.top,
+    pressure: e.pressure || 0.5,
+    t: e.timeStamp
+  };
 }
 
 // ─────────────────────────────────────────
@@ -2739,7 +2759,6 @@ function resizeGlobalCanvas(prevKey) {
   applyRetinaScale();
   restoreGlobalCanvas();
 }
-
 // ─────────────────────────────────────────
 //  UNDO / REDO — snapshot only when button tapped
 // ─────────────────────────────────────────
@@ -2866,18 +2885,23 @@ globalCanvas.addEventListener('pointerdown', e => {
   if (!gDrawMode) return;
   if (e.pointerType !== 'pen' && e.pointerType !== 'mouse') return;
   e.preventDefault();
+  e.stopPropagation();
   gDrawing = true;
-  // Capture pointer so pointermove keeps firing even outside canvas bounds
   try { globalCanvas.setPointerCapture(e.pointerId); } catch(_) {}
-  fpBegin(e.offsetX, e.offsetY, e.pressure || 0.5, e.timeStamp);
+  const p = getEventPos(e);
+  fpBegin(p.x, p.y, p.pressure, p.t);
 }, { passive: false });
 
 globalCanvas.addEventListener('pointermove', e => {
   if (!gDrawMode || !gDrawing) return;
   if (e.pointerType !== 'pen' && e.pointerType !== 'mouse') return;
   e.preventDefault();
+  e.stopPropagation();
   const pts = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
-  pts.forEach(ev => fpDraw(ev.offsetX, ev.offsetY, ev.pressure || 0.5, ev.timeStamp));
+  pts.forEach(ev => {
+    const rect = globalCanvas.getBoundingClientRect();
+    fpDraw(ev.clientX - rect.left, ev.clientY - rect.top, ev.pressure || 0.5, ev.timeStamp);
+  });
 }, { passive: false });
 
 globalCanvas.addEventListener('pointerup', e => {
@@ -2886,25 +2910,28 @@ globalCanvas.addEventListener('pointerup', e => {
   e.preventDefault();
   gDrawing = false;
   gCtx.globalCompositeOperation = 'source-over';
-  scheduleSave();   // deferred — never blocks the next stroke
+  scheduleSave();
 }, { passive: false });
 
 globalCanvas.addEventListener('pointercancel', e => {
+  // pointercancel fires when Safari thinks a gesture started — we ignore it
+  // and keep drawing. Only stop if we're genuinely done.
   if (!gDrawing) return;
-  gDrawing = false;
-  gCtx.globalCompositeOperation = 'source-over';
-  scheduleSave();
+  // DO NOT stop drawing on pointercancel — just let it continue
+  // The setPointerCapture above ensures we keep getting events
 });
 
 // Mouse fallback for desktop testing
 globalCanvas.addEventListener('mousedown', e => {
   if (!gDrawMode || e.button !== 0) return;
   gDrawing = true;
-  fpBegin(e.offsetX, e.offsetY, 0.5, e.timeStamp);
+  const p = getEventPos(e);
+  fpBegin(p.x, p.y, 0.5, p.t);
 });
 globalCanvas.addEventListener('mousemove', e => {
   if (!gDrawMode || !gDrawing) return;
-  fpDraw(e.offsetX, e.offsetY, 0.5, e.timeStamp);
+  const p = getEventPos(e);
+  fpDraw(p.x, p.y, 0.5, p.t);
 });
 globalCanvas.addEventListener('mouseup', () => {
   if (!gDrawing) return;
