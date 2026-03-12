@@ -2632,107 +2632,130 @@ window.addEventListener('resize', () => {
 });
 
 // ══════════════════════════════════════════
-//  FOUNTAIN PEN DRAWING ENGINE  v1.8
-//  Phase 1: Pressure + Bezier smoothing
-//  Phase 2: Apple Pencil / palm rejection
-//  Phase 3: Organic width transitions
-//  Phase 4: Undo/Redo stacks, smart eraser
+//  FOUNTAIN PEN DRAWING ENGINE  v1.9
+//  Fixes: crisp DPR rendering, per-view ink isolation,
+//         desynchronized context, velocity thinning
 // ══════════════════════════════════════════
 const overlay     = document.getElementById('global-draw-overlay');
 const globalCanvas= document.getElementById('global-draw-canvas');
-const gCtx        = globalCanvas.getContext('2d');
+
+// ── CRITICAL: desynchronized reduces input lag on iPad Safari ──
+// ── Get context ONCE here — never re-get it (re-getting loses the scale) ──
+const gCtx = globalCanvas.getContext('2d', { desynchronized: true });
+
 const fab         = document.getElementById('pencil-fab');
 const fabLabel    = document.getElementById('fab-label');
 const drawToolbar = document.getElementById('draw-toolbar');
 
 // ── Tool state ──
 let gDrawMode = false;
-let gTool     = 'pen';      // 'pen' | 'marker' | 'eraser'
+let gTool     = 'pen';
 let gColor    = '#1A1410';
-let gBaseSize = 2;          // base stroke width (user-controlled)
+let gBaseSize = 2;
 
-// ── Fountain pen stroke state ──
-let gDrawing        = false;
-let gPrevX          = 0, gPrevY = 0;       // previous point
-let gMidX           = 0, gMidY = 0;        // bezier midpoint
-let gSmoothedWidth  = 1;                   // pressure-smoothed width
-let gLastPressure   = 0.5;                 // previous pressure sample
+// ── Stroke state ──
+let gDrawing      = false;
+let gPrevX = 0, gPrevY = 0;
+let gMidX  = 0, gMidY  = 0;
+let gLastPressure = 0.5;
+let gPrevTime     = 0;   // for velocity calculation
 
-// ── Per-view canvas store ──
+// ── Per-view ink store ──
 state.overlayCanvases = {};
 state.overlayUndo     = {};
 state.overlayRedo     = {};
 
+// ── Current DPR (set once per resize) ──
+let gDPR = window.devicePixelRatio || 1;
+
 // ────────────────────────────────────────
-//  RETINA + CANVAS SIZING
+//  VIEW KEY — each view+page gets its own ink
 // ────────────────────────────────────────
 function overlayKey() {
-  if (state.currentView === 'month') {
+  const v = state.currentView;
+  if (v === 'month') {
     const d = currentMonthDate();
     return `month-${d.getFullYear()}-${d.getMonth()}`;
   }
-  if (state.currentView === 'week')  return `week-${getWeekKey(currentWeekMonday())}`;
-  if (state.currentView === 'notes') return `notes-overlay`;
+  if (v === 'week')  return `week-${getWeekKey(currentWeekMonday())}`;
+  if (v === 'notes') return `notes-toc`;   // notes view uses its own key
   return `day-${dateKey(currentDay())}`;
 }
 
-function setCanvasRetina(canvas, logW, logH) {
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width  = Math.floor(logW * dpr);
-  canvas.height = Math.floor(logH * dpr);
-  canvas.style.width  = logW + 'px';
-  canvas.style.height = logH + 'px';
-  canvas.getContext('2d').scale(dpr, dpr);
+// ────────────────────────────────────────
+//  CANVAS SIZING  — fixes blurry lines
+//  Sets pixel buffer = logical × DPR
+//  Applies scale to THE SAME gCtx used for drawing
+// ────────────────────────────────────────
+function applyRetinaScale() {
+  gDPR = window.devicePixelRatio || 1;
+  const main = document.querySelector('.main');
+  if (!main) return;
+  const r = main.getBoundingClientRect();
+  const logW = r.width, logH = r.height;
+
+  // Physical pixel buffer
+  globalCanvas.width  = Math.round(logW * gDPR);
+  globalCanvas.height = Math.round(logH * gDPR);
+
+  // CSS size stays logical so it overlays correctly
+  globalCanvas.style.width  = logW + 'px';
+  globalCanvas.style.height = logH + 'px';
+
+  // Scale THE SHARED gCtx so all drawing calls use logical coordinates
+  // This is the fix: we use the same gCtx reference, not a new one
+  gCtx.setTransform(gDPR, 0, 0, gDPR, 0, 0);
 }
 
-function logicalSize(canvas) {
-  // Returns the CSS (logical) dimensions
-  return {
-    w: parseFloat(canvas.style.width)  || canvas.width,
-    h: parseFloat(canvas.style.height) || canvas.height
-  };
-}
-
-function clearCtx(ctx, canvas) {
-  ctx.save();
-  ctx.setTransform(1,0,0,1,0,0);
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.restore();
-}
-
-function restoreImageToCtx(ctx, canvas, dataURL) {
-  if (!dataURL) return;
-  const img = new Image();
-  img.onload = () => {
-    ctx.save();
-    ctx.setTransform(1,0,0,1,0,0);
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    ctx.restore();
-  };
-  img.src = dataURL;
-}
-
+// ────────────────────────────────────────
+//  SAVE / RESTORE / RESIZE
+// ────────────────────────────────────────
 function saveGlobalCanvas() {
   state.overlayCanvases[overlayKey()] = globalCanvas.toDataURL();
 }
 
-function restoreGlobalCanvas() {
-  clearCtx(gCtx, globalCanvas);
-  restoreImageToCtx(gCtx, globalCanvas, state.overlayCanvases[overlayKey()]);
+function clearCanvas() {
+  // Must use raw pixel coords (bypass logical transform)
+  gCtx.save();
+  gCtx.setTransform(1,0,0,1,0,0);
+  gCtx.clearRect(0, 0, globalCanvas.width, globalCanvas.height);
+  gCtx.restore();
 }
 
-function resizeGlobalCanvas() {
-  const main = document.querySelector('.main');
-  if (!main) return;
-  const r   = main.getBoundingClientRect();
-  const key = overlayKey();
-  if (globalCanvas.width > 0) state.overlayCanvases[key] = globalCanvas.toDataURL();
-  setCanvasRetina(globalCanvas, r.width, r.height);
+function restoreGlobalCanvas() {
+  clearCanvas();
+  const data = state.overlayCanvases[overlayKey()];
+  if (!data) return;
+  const img = new Image();
+  img.onload = () => {
+    gCtx.save();
+    gCtx.setTransform(1,0,0,1,0,0);
+    gCtx.drawImage(img, 0, 0, globalCanvas.width, globalCanvas.height);
+    gCtx.restore();
+    // Re-apply logical scale after image restore
+    gCtx.setTransform(gDPR, 0, 0, gDPR, 0, 0);
+  };
+  img.src = data;
+}
+
+// Called when switching views OR on first load
+// prevKey = the key of the view we're LEAVING (so we save its ink correctly)
+function resizeGlobalCanvas(prevKey) {
+  // 1. Save current ink under the KEY WE ARE LEAVING (before state.currentView changes)
+  const keyToSave = prevKey || overlayKey();
+  if (globalCanvas.width > 0 && globalCanvas.height > 0) {
+    state.overlayCanvases[keyToSave] = globalCanvas.toDataURL();
+  }
+
+  // 2. Resize physical buffer + re-apply DPR scale
+  applyRetinaScale();
+
+  // 3. Restore ink for the NEW current view
   restoreGlobalCanvas();
 }
 
 // ────────────────────────────────────────
-//  UNDO / REDO  (per view, 30 steps)
+//  UNDO / REDO (30 steps per view)
 // ────────────────────────────────────────
 function pushUndo() {
   const key = overlayKey();
@@ -2740,92 +2763,101 @@ function pushUndo() {
   if (!state.overlayRedo[key]) state.overlayRedo[key] = [];
   state.overlayUndo[key].push(globalCanvas.toDataURL());
   if (state.overlayUndo[key].length > 30) state.overlayUndo[key].shift();
-  state.overlayRedo[key] = []; // clear redo on new stroke
+  state.overlayRedo[key] = [];
 }
 
 function doUndo() {
-  const key   = overlayKey();
-  const uStack = state.overlayUndo[key];
-  const rStack = state.overlayRedo[key] || (state.overlayRedo[key] = []);
-  if (!uStack || uStack.length === 0) { showToast('Nothing to undo'); return; }
-  rStack.push(globalCanvas.toDataURL());
-  const prev = uStack.pop();
-  clearCtx(gCtx, globalCanvas);
-  restoreImageToCtx(gCtx, globalCanvas, prev);
-  setTimeout(saveGlobalCanvas, 50);
+  const key = overlayKey();
+  const u = state.overlayUndo[key];
+  if (!u || !u.length) { showToast('Nothing to undo'); return; }
+  if (!state.overlayRedo[key]) state.overlayRedo[key] = [];
+  state.overlayRedo[key].push(globalCanvas.toDataURL());
+  const prev = u.pop();
+  clearCanvas();
+  const img = new Image();
+  img.onload = () => {
+    gCtx.save(); gCtx.setTransform(1,0,0,1,0,0);
+    gCtx.drawImage(img, 0, 0, globalCanvas.width, globalCanvas.height);
+    gCtx.restore();
+    gCtx.setTransform(gDPR, 0, 0, gDPR, 0, 0);
+    saveGlobalCanvas();
+  };
+  img.src = prev;
 }
 
 function doRedo() {
-  const key   = overlayKey();
-  const uStack = state.overlayUndo[key] || (state.overlayUndo[key] = []);
-  const rStack = state.overlayRedo[key];
-  if (!rStack || rStack.length === 0) { showToast('Nothing to redo'); return; }
-  uStack.push(globalCanvas.toDataURL());
-  const next = rStack.pop();
-  clearCtx(gCtx, globalCanvas);
-  restoreImageToCtx(gCtx, globalCanvas, next);
-  setTimeout(saveGlobalCanvas, 50);
+  const key = overlayKey();
+  const r = state.overlayRedo[key];
+  if (!r || !r.length) { showToast('Nothing to redo'); return; }
+  if (!state.overlayUndo[key]) state.overlayUndo[key] = [];
+  state.overlayUndo[key].push(globalCanvas.toDataURL());
+  const next = r.pop();
+  clearCanvas();
+  const img = new Image();
+  img.onload = () => {
+    gCtx.save(); gCtx.setTransform(1,0,0,1,0,0);
+    gCtx.drawImage(img, 0, 0, globalCanvas.width, globalCanvas.height);
+    gCtx.restore();
+    gCtx.setTransform(gDPR, 0, 0, gDPR, 0, 0);
+    saveGlobalCanvas();
+  };
+  img.src = next;
 }
 
 // ────────────────────────────────────────
-//  FOUNTAIN PEN CORE ENGINE
-//  Bezier smoothing + pressure width
+//  FOUNTAIN PEN ENGINE
+//  Bezier smoothing + pressure + velocity thinning
 // ────────────────────────────────────────
-
-// Smoothed pressure: weighted average so width changes feel organic, not twitchy
-function smoothPressure(rawPressure) {
-  // Fallback: if no real pressure data (mouse / pointerType=mouse), use 0.5
-  const p = (rawPressure > 0 && rawPressure <= 1) ? rawPressure : 0.5;
-  // Weighted average: 70% previous + 30% new → smooth organic transition
-  gLastPressure = gLastPressure * 0.7 + p * 0.3;
+function smoothPressure(raw) {
+  const p = (raw > 0 && raw <= 1) ? raw : 0.5;
+  gLastPressure = gLastPressure * 0.65 + p * 0.35;
   return gLastPressure;
 }
 
-function pressureWidth(pressure) {
-  // Fountain pen: thin at low pressure, thickens with push
-  // gBaseSize acts as the "medium" width; min is 0.4×, max is 2.5×
-  const minW = Math.max(0.4, gBaseSize * 0.4);
-  const maxW = gBaseSize * 2.5;
-  return minW + (maxW - minW) * pressure;
+function calcWidth(pressure, velocity) {
+  const minW = Math.max(0.5, gBaseSize * 0.4);
+  const maxW = gBaseSize * 2.8;
+  // Pressure widens, velocity thins (faster = slightly thinner, like real ink)
+  const velFactor = Math.max(0.4, 1 - velocity * 0.004);
+  return (minW + (maxW - minW) * pressure) * velFactor;
 }
 
-// Begin a new stroke
-function fpBegin(x, y, pressure) {
+function fpBegin(x, y, pressure, t) {
   gPrevX = x; gPrevY = y;
   gMidX  = x; gMidY  = y;
-  gLastPressure  = smoothPressure(pressure);
-  gSmoothedWidth = pressureWidth(gLastPressure);
-  gCtx.beginPath();
-  gCtx.moveTo(x, y);
+  gPrevTime     = t;
+  gLastPressure = smoothPressure(pressure);
+  gCtx.lineCap  = 'round';
+  gCtx.lineJoin = 'round';
 }
 
-// Draw a segment using quadratic bezier for smoothness
-function fpDraw(x, y, pressure) {
-  const w = pressureWidth(smoothPressure(pressure));
+function fpDraw(x, y, pressure, t) {
+  // Velocity in px/ms — used to thin fast strokes
+  const dt       = Math.max(1, t - gPrevTime);
+  const dist     = Math.hypot(x - gPrevX, y - gPrevY);
+  const velocity = dist / dt;
 
-  // Midpoint between previous and current → bezier control point
+  const w       = calcWidth(smoothPressure(pressure), velocity);
   const newMidX = (gPrevX + x) / 2;
   const newMidY = (gPrevY + y) / 2;
 
   gCtx.beginPath();
   gCtx.moveTo(gMidX, gMidY);
   gCtx.quadraticCurveTo(gPrevX, gPrevY, newMidX, newMidY);
-
-  gCtx.lineCap    = 'round';
-  gCtx.lineJoin   = 'round';
-  gCtx.lineWidth  = w;
+  gCtx.lineCap  = 'round';
+  gCtx.lineJoin = 'round';
+  gCtx.lineWidth = w;
 
   if (gTool === 'eraser') {
     gCtx.globalCompositeOperation = 'destination-out';
     gCtx.strokeStyle = 'rgba(0,0,0,1)';
-    gCtx.lineWidth   = w * 5; // eraser wider
+    gCtx.lineWidth   = w * 6;
   } else if (gTool === 'marker') {
     gCtx.globalCompositeOperation = 'source-over';
-    const r  = parseInt(gColor.slice(1,3),16);
-    const g2 = parseInt(gColor.slice(3,5),16);
-    const b  = parseInt(gColor.slice(5,7),16);
-    gCtx.strokeStyle = `rgba(${r},${g2},${b},0.25)`;
-    gCtx.lineWidth   = w * 3;
+    const hx = gColor.replace('#','');
+    const rr = parseInt(hx.slice(0,2),16), gg = parseInt(hx.slice(2,4),16), bb = parseInt(hx.slice(4,6),16);
+    gCtx.strokeStyle = `rgba(${rr},${gg},${bb},0.22)`;
+    gCtx.lineWidth   = w * 3.5;
   } else {
     gCtx.globalCompositeOperation = 'source-over';
     gCtx.strokeStyle = gColor;
@@ -2833,9 +2865,9 @@ function fpDraw(x, y, pressure) {
 
   gCtx.stroke();
 
-  // Advance state
   gMidX  = newMidX; gMidY  = newMidY;
   gPrevX = x;       gPrevY = y;
+  gPrevTime = t;
 }
 
 function fpEnd() {
@@ -2843,60 +2875,42 @@ function fpEnd() {
 }
 
 // ────────────────────────────────────────
-//  POINTER EVENT HANDLERS
-//  Palm rejection: only 'pen' and 'mouse'
-//  Touch fingers are ignored entirely
+//  POINTER EVENTS — pen only, palm rejected
 // ────────────────────────────────────────
-function getCanvasXY(e) {
-  // offsetX/Y work correctly for pointer events (already in canvas space)
-  return { x: e.offsetX, y: e.offsetY, pressure: e.pressure || 0.5 };
-}
-
 globalCanvas.addEventListener('pointerdown', e => {
-  if (!gDrawMode) return;
-  // PALM REJECTION: drop all 'touch' pointer type — only pen and mouse draw
-  if (e.pointerType === 'touch') return;
+  if (!gDrawMode || e.pointerType === 'touch') return;
   e.preventDefault();
   pushUndo();
   gDrawing = true;
-  const { x, y, pressure } = getCanvasXY(e);
-  fpBegin(x, y, pressure);
+  fpBegin(e.offsetX, e.offsetY, e.pressure || 0.5, e.timeStamp);
 }, { passive: false });
 
 globalCanvas.addEventListener('pointermove', e => {
-  if (!gDrawMode || !gDrawing) return;
-  if (e.pointerType === 'touch') return;
+  if (!gDrawMode || !gDrawing || e.pointerType === 'touch') return;
   e.preventDefault();
-  // getCoalescedEvents gives every sample between frames — critical for fast writing
   const pts = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
-  pts.forEach(ev => {
-    fpDraw(ev.offsetX, ev.offsetY, ev.pressure || 0.5);
-  });
+  pts.forEach(ev => fpDraw(ev.offsetX, ev.offsetY, ev.pressure || 0.5, ev.timeStamp));
 }, { passive: false });
 
 globalCanvas.addEventListener('pointerup', e => {
-  if (!gDrawing) return;
-  if (e.pointerType === 'touch') return;
+  if (!gDrawing || e.pointerType === 'touch') return;
   e.preventDefault();
-  gDrawing = false;
-  fpEnd();
-  saveGlobalCanvas();
+  gDrawing = false; fpEnd(); saveGlobalCanvas();
 }, { passive: false });
 
 globalCanvas.addEventListener('pointercancel', () => {
   if (gDrawing) { gDrawing = false; fpEnd(); saveGlobalCanvas(); }
 });
 
-// Mouse fallback for non-Pencil use (desktop testing etc.)
+// Mouse fallback (desktop preview / testing)
 globalCanvas.addEventListener('mousedown', e => {
   if (!gDrawMode || e.button !== 0) return;
-  pushUndo();
-  gDrawing = true;
-  fpBegin(e.offsetX, e.offsetY, 0.5);
+  pushUndo(); gDrawing = true;
+  fpBegin(e.offsetX, e.offsetY, 0.5, e.timeStamp);
 });
 globalCanvas.addEventListener('mousemove', e => {
   if (!gDrawMode || !gDrawing) return;
-  fpDraw(e.offsetX, e.offsetY, 0.5);
+  fpDraw(e.offsetX, e.offsetY, 0.5, e.timeStamp);
 });
 globalCanvas.addEventListener('mouseup', () => {
   if (!gDrawing) return;
@@ -2921,9 +2935,9 @@ function toggleDrawMode() {
   overlay.style.pointerEvents = gDrawMode ? 'all' : 'none';
   if (gDrawMode) {
     resizeGlobalCanvas();
-    showToast('Drawing ON — Pencil to write, Done when finished');
+    showToast('Pencil to write — tap Done when finished');
   } else {
-    showToast('Drawing saved');
+    showToast('Ink saved');
   }
 }
 fab.addEventListener('click',    toggleDrawMode);
@@ -2958,28 +2972,27 @@ document.getElementById('dt-size').addEventListener('input', e => {
 
 document.getElementById('dt-clear').addEventListener('click', () => {
   pushUndo();
-  clearCtx(gCtx, globalCanvas);
+  clearCanvas();
   saveGlobalCanvas();
   showToast('Page cleared');
 });
 
 document.getElementById('dt-undo').addEventListener('click', doUndo);
 
-// Add Redo button dynamically next to Undo
 (function addRedoBtn() {
   const undoBtn = document.getElementById('dt-undo');
-  if (!undoBtn) return;
+  if (!undoBtn || document.getElementById('dt-redo')) return;
   const redo = document.createElement('button');
-  redo.className = 'dt-btn';
-  redo.id = 'dt-redo';
-  redo.textContent = '↪';
-  redo.title = 'Redo';
+  redo.className = 'dt-btn'; redo.id = 'dt-redo';
+  redo.textContent = '↪'; redo.title = 'Redo';
   redo.addEventListener('click', doRedo);
   undoBtn.after(redo);
 })();
 
 // ────────────────────────────────────────
-//  NAVIGATION — restore overlay per view
+//  NAVIGATION — CRITICAL ink isolation fix
+//  Save ink under the OLD key BEFORE switchView
+//  changes state.currentView, then restore new view's ink
 // ────────────────────────────────────────
 ['month-prev','month-next','month-today',
  'week-prev','week-next','week-today',
@@ -2988,10 +3001,39 @@ document.getElementById('dt-undo').addEventListener('click', doUndo);
   if (el) el.addEventListener('click', () => setTimeout(resizeGlobalCanvas, 80));
 });
 
-// Initial state — overlay always visible, pointer-events off until Draw tapped
+// ────────────────────────────────────────
+//  switchView ink handoff
+//  Patch switchView so it passes the old key to resizeGlobalCanvas
+// ────────────────────────────────────────
+const _origSwitchView = switchView;
+window._patchedSwitchView = function(v) {
+  const oldKey = overlayKey();               // capture BEFORE view changes
+  _origSwitchView(v);                        // changes state.currentView
+  setTimeout(() => resizeGlobalCanvas(oldKey), 60);
+};
+// Re-wire all tab clicks to use the patched version
+document.querySelectorAll('.tab').forEach(tab => {
+  // Remove old listeners by cloning
+  const newTab = tab.cloneNode(true);
+  tab.parentNode.replaceChild(newTab, tab);
+  let last = 0;
+  const fire = e => {
+    const now = Date.now();
+    if (now - last < 400) return;
+    last = now;
+    if (e.cancelable) e.preventDefault();
+    window._patchedSwitchView(newTab.dataset.view);
+  };
+  newTab.addEventListener('click',    fire);
+  newTab.addEventListener('touchend', fire);
+});
+
+// Initial setup
 overlay.style.display       = 'block';
 overlay.style.pointerEvents = 'none';
-resizeGlobalCanvas();
+applyRetinaScale();
+restoreGlobalCanvas();
+
 </script>
 </body>
 </html>
